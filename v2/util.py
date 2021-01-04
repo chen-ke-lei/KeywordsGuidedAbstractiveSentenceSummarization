@@ -1,6 +1,7 @@
 import tensorflow as tf
 from keras.layers import Dense, Embedding, Bidirectional, LSTM, Input, Activation, Concatenate, Add, Multiply, \
-    Lambda,Masking
+    Lambda, Masking
+from bert4keras.layers import Loss
 import os
 import numpy as np
 import keras
@@ -150,6 +151,7 @@ class Pgen(Layer):
         super(Pgen, self).__init__(**kwargs)
 
     def build(self, input_shape):
+        self.supports_masking = True
         self.W1 = self.add_weight(name='W1',
                                   shape=(input_shape[0][1], input_shape[0][1],),
                                   initializer='uniform',
@@ -161,10 +163,11 @@ class Pgen(Layer):
                                   initializer='uniform',
                                   trainable=True,
                                   )
-        self.bias = self.add_weight(shape=(input_shape[0][1],),
-                                    initializer='uniform',
-                                    name='bias',
-                                    trainable=True, )
+        self.bias = self.add_weight(
+            shape=(input_shape[0][1],),
+            initializer='uniform',
+            name='bias',
+            trainable=True, )
 
         super(Pgen, self).build(input_shape)
 
@@ -181,12 +184,14 @@ class Pgen(Layer):
         return input_shape[0][0], input_shape[0][1];
 
 
+
 ####概率分布层
 class LambdaT(Layer):
     def __init__(self, **kwargs):
         super(LambdaT, self).__init__(**kwargs)
 
     def build(self, input_shape):
+        self.supports_masking = True
         self.W1 = self.add_weight(name='W1',
                                   shape=(input_shape[2][2], 1,),
                                   initializer='uniform',
@@ -229,7 +234,6 @@ class LambdaT(Layer):
     def compute_output_shape(self, input_shape):
         return input_shape[0][0], input_shape[0][1], input_shape[2][2]
 
-
 ####这里完成的是lanbdaT 与 pgen 对应元素的相乘
 def mul(x):
     a = x[0]
@@ -248,3 +252,17 @@ def mul1(x, x2):
     res = K.dot(x2, x)
 
     return tf.transpose(res, [2, 1, 0])
+
+
+class CrossEntropy(Loss):
+    """交叉熵作为loss，并mask掉输入部分
+    """
+
+    def compute_loss(self, inputs, mask=None):
+        y_true, y_mask, y_pred = inputs
+        y_true = y_true[:, 1:]  # 目标token_ids
+        y_mask = y_mask[:, 1:]  # segment_ids，刚好指示了要预测的部分
+        y_pred = y_pred[:, :-1]  # 预测序列，错开一位
+        loss = K.sparse_categorical_crossentropy(y_true, y_pred)
+        loss = K.sum(loss * y_mask) / K.sum(y_mask)
+        return loss

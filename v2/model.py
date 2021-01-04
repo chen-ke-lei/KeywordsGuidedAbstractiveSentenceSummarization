@@ -6,6 +6,13 @@ from bert4keras.models import build_transformer_model
 """
 
 
+def reshape(input, maxlen):
+    input = Lambda(lambda x: tf.expand_dims(x, axis=-1))(input)
+    input = Dense(maxlen)(input)
+    print(K.int_shape(input))
+    return Lambda(lambda x: K.sum(x, axis=1))(input)
+
+
 def embeddingAndWeight(input, libSize, embeddingSize, weights=None):
     if weights is None:
         embedding = Embedding(libSize, embeddingSize)(input)
@@ -32,13 +39,11 @@ def calEncode(input, mod):
 def attention(input, hiddenSize):
     s = LSTM(hiddenSize, return_sequences=True)(input)
     attention = Attention()([input, s])
-    a, c = split2(attention, [-1, -1, 2], [-1, -1])
+    a, c = split2(attention, [-1, K.int_shape(attention)[1], 2], [-1, K.int_shape(attention)[1]])
     return a, c, s
 
 
 def GateFusion(cr, ck, hiddenSize):
-    cr=Lambda(lambda x:x[0:hiddenSize])(cr)
-    ck = Lambda(lambda x: x[0:hiddenSize])(ck)
     gt = Activation("sigmoid")(Add()([Dense(hiddenSize)(cr), Dense(hiddenSize)(ck)]))
     gt_1 = Lambda(lambda x: 1 - x)(gt)
     return Add()([Multiply()([gt, cr]), Multiply()([gt_1, ck])]);
@@ -59,9 +64,9 @@ def test(input, output):
     model.summary();
 
 
-def genertorY(s, w, embedingSize):
-    s = Dense(embedingSize)(s)
-    return Lambda(mul1, arguments={'x2': w})(s)
+def genertorY(s, dicLen):
+    s = Dense(dicLen)(s)
+    return s
 
 
 def calLambda(c, s, y):
@@ -154,24 +159,50 @@ def createModel(maxLen, libSize, embeddingSize, hiddenSize):
     return model
 
 
-def loadBertModl(basePath):
+def tranfer(input, len):
+    # input = Lambda(lambda x: K.expand_dims(x, axis=-1))(input)
+    input = Dense(len)(input)
+    return input
+
+
+def loadBertModl(basePath, hiddensize, maxlen, dicLength):
     config_path = basePath + '/bert_config.json'
     checkpoint_path = basePath + '/bert_model.ckpt'
-    model = build_transformer_model(config_path, checkpoint_path)
-    # model.summary()
-    # print(model.layers)
+    model = build_transformer_model(config_path, checkpoint_path, sequence_length=maxlen)
 
-    input = model.input
-    output = model.output
-    output = Activation('softmax')(output)
-    hiddenState = model.layers[-2].output
-    a, c, s = attention(output, 128)
-    print(hiddenState)
-    a1, c1, s1 = attention(hiddenState, 128)
-    print(K.int_shape(c1))
-    c = GateFusion(c1, c, 64)
-    # pgen = calPgen(c, s)
-    test(input, [c])
+    input = model.inputs
+    output = model.outputs[0]
+    # output = CrossEntropy(2)(input + output)
+    # output = reshape(output, maxlen)
+    keyWords = Dense(hiddensize)(output)
+    keyWords = Activation('softmax')(keyWords)
+
+    s0 = calS0(output, output, hiddensize)
+    s10 = calS0(keyWords, keyWords, hiddensize)
+
+    output = calS(output, s0)
+    keyWords = calS(keyWords, s10)
+
+    ####对bert结果做attention
+    a, c, s = attention(output, hiddensize)
+
+    ###用bert处理了下关键字生成，这里可能有问题。。。。
+    a1, c1, s1 = attention(keyWords, hiddensize)
+
+    c = GateFusion(c1, c, maxlen)
+
+    pgen = calPgen(c, s)
+
+    A = calA(a, a1)
+    y = genertorY(output, dicLength)
+
+    lambdaT = calLambda(c, s, y)
+    test(input, [lambdaT])
+    p = calPw(A, lambdaT, pgen)
+
+    myModel = Model(inputs=input, outputs=[p])
+    # myModel.summary()
+    return myModel
 
 
-loadBertModl('./model/uncased_L-2_H-128_A-2')
+loadBertModl('./model/uncased_L-2_H-128_A-2', 128, 64, 10000)

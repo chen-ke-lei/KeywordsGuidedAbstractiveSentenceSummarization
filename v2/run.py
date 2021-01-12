@@ -1,6 +1,5 @@
 from v2.model import *
 from v2.dataProcess import *
-import gc
 
 
 ####################这个类为整个模型的执行流程 依赖base.model 和 base.dataProcess#######################

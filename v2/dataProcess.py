@@ -1,6 +1,7 @@
 import re;
 import numpy as np
 from bert4keras.tokenizers import Tokenizer, load_vocab
+import json
 
 ######字典
 dic = None
@@ -41,6 +42,16 @@ def initTokenizer(dicPath='../data/dic.txt', diclenth=1000, handle=EnglishDicHan
 
 def line2WordHandle(line):
     return [x for x in re.split(r'\s+', line)]
+
+
+def factJsonHandle(line):
+    jsonData = json.loads(line)
+    return repliceSpaceHadle(jsonData['fact_cut'])
+
+
+def repliceSpaceHadle(line):
+    line = re.sub(r" ", "", line)
+    return line;
 
 
 def readFile(path, handle):
@@ -119,15 +130,6 @@ def readTrainData(sentecePath,
     return token_ids, segment_ids, one_Hot
 
 
-# dict = loadDic()
-
-
-# print(dict)
-tokenizer, dic = initTokenizer()
-token_ids, segment_ids, one_Hot = readTrainData('../data/train/src/train.src'
-                                                , '../data/train/tgt/train.tgt'
-                                                , 64,
-                                                tokenizer
-                                                ,
-                                                dic
-                                                )
+def loadLawData(path):
+    list = readFile(path, factJsonHandle)
+    return list

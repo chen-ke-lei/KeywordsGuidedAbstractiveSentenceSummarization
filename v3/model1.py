@@ -38,7 +38,7 @@ def model1(data_path='../law_data/train_cs.json',
     )
 
     hiddenSate = bertModel.outputs[0]
-
+    # hiddenSate = bertModel.outputs
     # accTmp = Dense(100, activation='relu')(hiddenSate)
     # lawTmp = Dense(100, activation='relu')(hiddenSate)
     # termTmp = Dense(100, activation='relu')(hiddenSate)
@@ -81,7 +81,7 @@ def model1(data_path='../law_data/train_cs.json',
     factList, accuList, lawList, termList = loadLawData(data_path)
     token_ids, segment_ids = data2index(tokenizer, maxlen, factList)
 
-    ###########加载测试数据
+    ##########加载测试数据
     factTest, accuTest, lawTest, termTest = loadLawData(testPath)
     token_test, segment_test = data2index(tokenizer, maxlen, factTest)
 
@@ -104,6 +104,9 @@ def model1(data_path='../law_data/train_cs.json',
     model.save_weights(weightPath)
 
 
+# model1()
+
+
 def model1_LSTM_ENCODE(data_path='../law_data/train_cs.json',
                        maxlen=512,
                        batch_size=256,
@@ -111,17 +114,18 @@ def model1_LSTM_ENCODE(data_path='../law_data/train_cs.json',
                        epochs=20,
                        baseSavePath='../save/'
                        ):
-    dic = loadDic()
-    weightPath = baseSavePath + 'LSTM' + '_l2' + '.weights'
+    dic = loadDicByPKL()
+    embeddingWeight = loadEmbeddingWeight()
+    weightPath = baseSavePath + 'LSTM' + '_ebdwgt' + '.weights'
     dataInput = Input(shape=(maxlen,))
-    embedding = Embedding(len(dic) + 1, 128)(dataInput)
+    embedding = Embedding(len(dic), 200, weights=[embeddingWeight])(dataInput)
     hiddenSate = LSTM(128)(embedding)
     accTmp = Dense(100, activation='tanh')(hiddenSate)
     lawTmp = Dense(100, activation='tanh')(hiddenSate)
     termTmp = Dense(100, activation='tanh')(hiddenSate)
-    accuOut = Dense(117, name='acc', activation='softmax', kernel_regularizer=regularizers.l2())(accTmp)
-    lawOut = Dense(101, name='law', activation='softmax', kernel_regularizer=regularizers.l2())(lawTmp)
-    termOut = Dense(11, name='term', activation='softmax', kernel_regularizer=regularizers.l2())(termTmp)
+    accuOut = Dense(117, name='acc', activation='softmax')(accTmp)
+    lawOut = Dense(101, name='law', activation='softmax')(lawTmp)
+    termOut = Dense(11, name='term', activation='softmax')(termTmp)
 
     model = Model(inputs=[dataInput], outputs=[accuOut, lawOut, termOut])
     if weightPath is not None and os.path.isfile(weightPath):
@@ -147,10 +151,10 @@ def model1_LSTM_ENCODE(data_path='../law_data/train_cs.json',
                            ]
                   )
     ########加载训练数据
-    factList, accuList, lawList, termList = loadBaseData(data_path, dic, maxlen=maxlen)
+    factList, accuList, lawList, termList = loadBaseDataByWords(data_path, dic, maxlen=maxlen)
 
     ###########加载测试数据
-    factTest, accuTest, lawTest, termTest = loadBaseData(testPath, dic, maxlen=maxlen)
+    factTest, accuTest, lawTest, termTest = loadBaseDataByWords(testPath, dic, maxlen=maxlen)
 
     model.fit([factList],
               {'acc': accuList,
@@ -166,6 +170,95 @@ def model1_LSTM_ENCODE(data_path='../law_data/train_cs.json',
               epochs=epochs,
               validation_freq=4,
               # validation_split=0.1,
+              # steps_per_epoch=steps_per_epoch
+              )
+    model.save_weights(weightPath)
+
+
+def model2_lstm_encoder(data_path='../law_data/law_mark_new.json',
+                        maxlen=512,
+                        batch_size=16,
+                        decodeHiddenState=128,
+                        summaryLen=32,
+                        epochs=30,
+                        baseSavePath='../save/'
+                        ):
+    dic = loadDicByPKL()
+    embeddingWeight = loadEmbeddingWeight()
+    weightPath = baseSavePath + 'LSTM' + '_ebdwgt' + '.weights'
+    dataInput = Input(shape=(maxlen,))
+    summaryInput = Input(shape=(summaryLen, len(dic)))
+    embedding = Embedding(len(dic), 200, weights=[embeddingWeight])(dataInput)
+    hiddenSateAll = LSTM(128, return_sequences=True)(embedding)
+    hiddenSate = Lambda(lambda x: x[:, -2:-1, :])(hiddenSateAll)
+    accTmp = Dense(100, activation='tanh')(hiddenSate)
+    lawTmp = Dense(100, activation='tanh')(hiddenSate)
+    termTmp = Dense(100, activation='tanh')(hiddenSate)
+    accuOut = Dense(117, name='acc', activation='softmax')(accTmp)
+    lawOut = Dense(101, name='law', activation='softmax')(lawTmp)
+    termOut = Dense(11, name='term', activation='softmax')(termTmp)
+
+    basemodel = Model(inputs=[dataInput], outputs=[accuOut, lawOut, termOut])
+    if weightPath is not None and os.path.isfile(weightPath):
+        print("加载weight成功:  " + weightPath)
+        basemodel.load_weights(weightPath)
+
+    encoder_outputs, state_h, state_c = LSTM(decodeHiddenState, return_state=True)(hiddenSate)
+    encoder_states = [state_h, state_c]
+
+    summaryPredicts, _, _ = LSTM(decodeHiddenState, return_sequences=True, return_state=True)(summaryInput,
+                                                                                              initial_state=encoder_states)
+    summaryPredicts = Dense(len(dic), activation='softmax', name='summary')(summaryPredicts)
+
+    keyWordOut = Dense(2, name='keyWord', activation='softmax')(hiddenSate)
+
+    model = Model(inputs=[dataInput, summaryInput]
+                  , outputs=[accuOut, lawOut, termOut, keyWordOut, summaryPredicts])
+
+    model.compile(optimizer=Adam(lr=0.0005
+                                 , beta_1=0.9
+                                 , beta_2=0.999
+                                 , epsilon=1e-08
+                                 ),
+                  loss={
+                      'acc': tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False),
+                      'law': tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False),
+                      'term': tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False),
+                      'keyWord': tf.keras.losses.CategoricalCrossentropy(),
+                      'summary': tf.keras.losses.CategoricalCrossentropy(),
+                  },
+                  loss_weights={
+                      'acc': 1.1,
+                      'law': 1.,
+                      'term': 1.,
+                      'keyWord': 1.,
+                      'summary': 1.
+                  },
+                  metrics={'acc': 'sparse_categorical_accuracy',
+                           'law': 'sparse_categorical_accuracy',
+                           'term': 'sparse_categorical_accuracy',
+                           'keyWord': 'accuracy',
+                           'summary': 'accuracy',
+                           }
+                  )
+    model.summary()
+    accuList, lawList, termList, summaryListInput, summaryListOutput, factList, keyWordsList = loadAllDataByWords(
+        path=data_path,
+        dic=dic,
+        maxlen=maxlen,
+        summaryLen=summaryLen)
+    summaryListInput = to_categorical(summaryListInput, num_classes=len(dic))
+    summaryListOutput = to_categorical(summaryListOutput, num_classes=len(dic))
+    model.fit([factList, summaryListInput],
+              {'acc': accuList,
+               'law': lawList,
+               'term': termList,
+               'keyWord': keyWordsList,
+               'summary': summaryListOutput,
+               },
+              batch_size=batch_size,
+              epochs=epochs,
+              validation_split=0.1,
               # steps_per_epoch=steps_per_epoch
               )
     model.save_weights(weightPath)
@@ -283,6 +376,7 @@ def model2(data_path='../law_data/law_mark_new.json',
               )
     model.save_weights(weightPath)
 
-
 for x in range(100):
-    model1_LSTM_ENCODE()
+    model2_lstm_encoder()
+# # for x in range(100):
+# #     model1_LSTM_ENCODE()
